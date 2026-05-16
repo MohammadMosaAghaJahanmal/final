@@ -1,22 +1,25 @@
-import React, { useState, useContext, useEffect } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
-  View,
+  Dimensions,
+  Linking,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  SafeAreaView,
-  Dimensions,
-  StyleSheet,
-  Platform
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { LineChart } from "react-native-chart-kit";
+import Angle from "./Angle";
 import Sensors from "./Sensors";
 import Setting from "./Setting";
-import Angle from "./Angle";
-import { LanguageContext } from "./LanguageContext";
 
-import WifiManager from "react-native-wifi-reborn";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import WifiManager from "react-native-wifi-reborn";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -26,66 +29,84 @@ const colors = {
   textPrimary: "#FFFFFF",
   textSecondary: "#94A3B8",
   card: "#111827",
-  success: "#22C55E"
+  success: "#22C55E",
 };
 
-const sensors = [
-  { key: "light", name: "Light", icon: "sunny-outline", color: "#F59E0B" },
-  { key: "temp", name: "Temp", icon: "thermometer-outline", color: "#FF6384" },
-  { key: "curr", name: "Curr", icon: "battery-charging-outline", color: "#4BC0C0" },
-  { key: "angle", name: "Angle", icon: "sunny-outline", color: "#FACC15" }
-];
-
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState("Overview");
+  const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState("overview");
   const [wifiOn, setWifiOn] = useState(false);
-  const { language } = useContext(LanguageContext);
   const [liveDataInterval, setLiveDataInterval] = useState(null);
 
-  const graphValues = {
-    light: [5, 10, 8, 12, 9],
-    temp: [15, 17, 16, 18, 19],
-    curr: [1, 2, 1.5, 2, 2.2],
-    angle: [30, 35, 32, 40, 38]
-  };
+  const [liveData, setLiveData] = useState({
+    light: 0,
+    temp: 0,
+    curr: 0,
+    angle: 0,
+  });
 
-  const graphData = {
-    labels: ["1", "2", "3", "4", "5"],
-    datasets: [
-      { data: graphValues.light, color: () => "#F59E0B" },
-      { data: graphValues.temp, color: () => "#FF6384" },
-      { data: graphValues.curr, color: () => "#4BC0C0" },
-      { data: graphValues.angle, color: () => "#FACC15" }
-    ],
-    legend: ["Light", "Temp", "Curr", "Angle"]
-  };
+  const sensors = [
+    {
+      key: "light",
+      name: t("sensors.light"),
+      icon: "sunny-outline",
+      color: "#F59E0B",
+    },
+    {
+      key: "temp",
+      name: t("sensors.temp"),
+      icon: "thermometer-outline",
+      color: "#FF6384",
+    },
+    {
+      key: "curr",
+      name: t("sensors.curr"),
+      icon: "battery-charging-outline",
+      color: "#4BC0C0",
+    },
+    {
+      key: "angle",
+      name: t("sensors.angle"),
+      icon: "sunny-outline",
+      color: "#FACC15",
+    },
+  ];
 
-  // Live Data Fetch Function
-  const startLiveData = async () => {
+  const storeTwoSecondsData = async (newData) => {
     try {
-      if (Platform.OS === "android") {
-        await WifiManager.setEnabled(true); // Android WiFi ON
+      const old = await AsyncStorage.getItem("sensor_stream");
+      let arr = old ? JSON.parse(old) : [];
+
+      arr.push(newData);
+
+      if (arr.length > 2) {
+        arr = arr.slice(arr.length - 2);
       }
 
+      await AsyncStorage.setItem("sensor_stream", JSON.stringify(arr));
+    } catch (e) {
+      console.log("Storage error:", e);
+    }
+  };
+
+  const startLiveData = async () => {
+    try {
       await WifiManager.connectToSSID("ESP32_HOTSPOT", "12345678");
-      console.log("Connected to ESP32 WiFi");
 
       const interval = setInterval(async () => {
         try {
-          const { data } = await axios.get("http://192.168.4.1/sensors");
-          console.log("Live Sensor Data:", data);
+          const { data } = await axios.get("http://192.168.4.1/data");
 
-          // POST to backend
-          await axios.post("https://yourbackend.com/api/sensors", data);
-
+          setLiveData(data);
+          await storeTwoSecondsData(data);
         } catch (err) {
-          console.log("Error fetching sensor data:", err);
+          console.log("Fetch error:", err);
         }
-      }, 2000);
+      }, 1000);
 
       setLiveDataInterval(interval);
     } catch (error) {
-      console.log("WiFi connection error:", error);
+      console.log("WiFi error:", error);
     }
   };
 
@@ -96,29 +117,58 @@ export default function Dashboard() {
     }
   };
 
-  // WiFi Button Handler
-  const handleWifiToggle = () => {
-    setWifiOn(!wifiOn);
-    if (!wifiOn) {
+  const handleWifiToggle = async () => {
+    const newState = !wifiOn;
+    setWifiOn(newState);
+
+    try {
+      if (Platform.OS === "android") {
+        await Linking.openURL(
+          "intent:#Intent;action=android.settings.WIFI_SETTINGS;end",
+        );
+      } else {
+        await Linking.openSettings();
+      }
+    } catch (e) {
+      console.log("WiFi open error:", e);
+    }
+
+    if (newState) {
       startLiveData();
     } else {
       stopLiveData();
     }
   };
 
+  const graphData = {
+    labels: ["1", "2"],
+    datasets: [
+      { data: [liveData.light], color: () => "#F59E0B" },
+      { data: [liveData.temp], color: () => "#FF6384" },
+      { data: [liveData.curr], color: () => "#4BC0C0" },
+    ],
+    legend: ["Light", "Temp", "Curr"],
+  };
+
+  const tabs = ["overview", "sensors", "angle", "setting"];
+
   return (
     <SafeAreaView style={styles.container}>
       {/* TOP BAR */}
       <View style={styles.topBar}>
-        <Text style={[styles.topTitle, {marginTop: 23}]}>{activeTab}</Text>
+        <Text style={styles.topTitle}>{t(`tabs.${activeTab}`)}</Text>
       </View>
 
-      {activeTab === "Overview" && (
-        <View style={{ flex: 1 }}>
-          {/* WIFI  */}
+      {/* BODY */}
+      {activeTab === "overview" && (
+        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+          {/* WIFI */}
           <View style={styles.wifiContainer}>
             <TouchableOpacity
-              style={[styles.wifiBtn, { backgroundColor: wifiOn ? "#052e1f" : "#1f2937" }]}
+              style={[
+                styles.wifiBtn,
+                { backgroundColor: wifiOn ? "#052e1f" : "#1f2937" },
+              ]}
               onPress={handleWifiToggle}
             >
               <Ionicons
@@ -126,86 +176,82 @@ export default function Dashboard() {
                 size={18}
                 color={wifiOn ? colors.success : colors.textSecondary}
               />
-              <Text style={{ color: wifiOn ? colors.success : colors.textSecondary, marginLeft: 6 }}>
-                WiFi
+              <Text
+                style={{
+                  marginLeft: 6,
+                  color: wifiOn ? colors.success : colors.textSecondary,
+                }}
+              >
+                {t("wifi.wifi")}
               </Text>
             </TouchableOpacity>
           </View>
 
           {/* CARDS */}
           <View style={styles.cardGrid}>
-            {sensors.map((s, index) => {
-              const value = graphValues[s.key].slice(-1)[0];
-              return (
-                <View
-                  key={s.key}
-                  style={[
-                    styles.sensorCard,
-                    index === sensors.length - 1 && { alignSelf: "center" }
-                  ]}
-                >
-                  <Ionicons name={s.icon} size={28} color={s.color} />
-                  <Text style={styles.sensorValue}>{value}</Text>
-                  <Text style={styles.sensorName}>{s.name}</Text>
-                </View>
-              );
-            })}
+            {sensors.map((s) => (
+              <View key={s.key} style={styles.sensorCard}>
+                <Ionicons name={s.icon} size={28} color={s.color} />
+                <Text style={styles.sensorValue}>{liveData[s.key]}</Text>
+                <Text style={styles.sensorName}>{s.name}</Text>
+              </View>
+            ))}
           </View>
 
           {/* CHART */}
-          <View style={[styles.chartCard, {backgroundColor: colors.secondary}]}>
+          <View style={styles.chartCard}>
             <LineChart
               data={graphData}
-              width={screenWidth - 40}
+              width={screenWidth - 32}
               height={300}
               chartConfig={{
                 backgroundGradientFrom: "#0B1220",
                 backgroundGradientTo: "#0B1220",
                 color: () => "#fff",
                 labelColor: () => "#94A3B8",
-                propsForDots: { r: "0" }
+                propsForDots: { r: "0" },
               }}
               bezier
               withDots={false}
-              withShadow={false}
-              style={{ borderRadius: 16 }}
             />
           </View>
-
-        </View>
+        </ScrollView>
       )}
 
-      {activeTab === "Sensors" && <Sensors language={language} />}
-      {activeTab === "Angle" && <Angle />}
-      {activeTab === "Setting" && <Setting />}
+      {activeTab === "sensors" && <Sensors />}
+      {activeTab === "angle" && <Angle />}
+      {activeTab === "setting" && <Setting />}
 
       {/* BOTTOM NAV */}
       <View style={styles.bottomBar}>
-        {["Overview", "Sensors", "Angle", "Setting"].map((tab) => (
+        {tabs.map((key) => (
           <TouchableOpacity
-            key={tab}
-            onPress={() => setActiveTab(tab)}
+            key={key}
+            onPress={() => setActiveTab(key)}
             style={styles.tabItem}
           >
             <Ionicons
               name={
-                tab === "Overview"
+                key === "overview"
                   ? "home-outline"
-                  : tab === "Sensors"
-                  ? "pulse-outline"
-                  : tab === "Angle"
-                  ? "sunny-outline"
-                  : "settings-outline"
+                  : key === "sensors"
+                    ? "pulse-outline"
+                    : key === "angle"
+                      ? "sunny-outline"
+                      : "settings-outline"
               }
               size={24}
-              color={activeTab === tab ? colors.accent : colors.textSecondary}
+              color={activeTab === key ? colors.accent : colors.textSecondary}
             />
-            <Text style={{
-              color: activeTab === tab ? colors.accent : colors.textSecondary,
-              fontSize: 12,
-              marginTop: 2
-            }}>
-              {tab}
+
+            <Text
+              style={{
+                color: activeTab === key ? colors.accent : colors.textSecondary,
+                fontSize: 12,
+                marginTop: 2,
+              }}
+            >
+              {t(`tabs.${key}`)}
             </Text>
           </TouchableOpacity>
         ))}
@@ -214,17 +260,81 @@ export default function Dashboard() {
   );
 }
 
+/* =========================
+   STYLES
+========================= */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.primary },
-  topBar: { backgroundColor: colors.card, padding: 16, alignItems: "center", borderBottomLeftRadius: 25, borderBottomRightRadius: 25 },
-  topTitle: { color: "#fff", fontSize: 20, fontWeight: "700" },
-  wifiContainer: { alignItems: "center", marginTop: 6, marginBottom: 4 },
-  wifiBtn: { flexDirection: "row", paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, alignItems: "center" },
-  cardGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", paddingHorizontal: 12, marginTop: 4 },
-  sensorCard: { width: "48%", backgroundColor: colors.card, borderRadius: 18, paddingVertical: 22, marginBottom: 10, alignItems: "center" },
-  sensorValue: { fontSize: 22, color: "#fff", fontWeight: "700", marginTop: 6 },
-  sensorName: { color: colors.textSecondary, fontSize: 13 },
-  chartCard: { flex: 1, marginHorizontal: 12, marginTop: 6, marginBottom: 6, backgroundColor: colors.card, borderRadius: 18, padding: 10, justifyContent: "center" },
-  bottomBar: { flexDirection: "row", justifyContent: "space-around", backgroundColor: colors.card, paddingVertical: 20, borderTopLeftRadius: 25, borderTopRightRadius: 25 },
-  tabItem: { alignItems: "center", justifyContent: "center" }
+  container: {
+    flex: 1,
+    backgroundColor: colors.primary,
+  },
+
+  topBar: {
+    padding: 16,
+    backgroundColor: colors.card,
+    alignItems: "center",
+  },
+
+  topTitle: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "700",
+  },
+
+  wifiContainer: {
+    alignItems: "center",
+    marginTop: 10,
+  },
+
+  wifiBtn: {
+    flexDirection: "row",
+    padding: 10,
+    borderRadius: 20,
+    alignItems: "center",
+  },
+
+  cardGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    padding: 12,
+  },
+
+  sensorCard: {
+    width: "48%",
+    backgroundColor: colors.card,
+    padding: 20,
+    borderRadius: 18,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+
+  sensorValue: {
+    fontSize: 22,
+    color: "#fff",
+    fontWeight: "700",
+  },
+
+  sensorName: {
+    color: colors.textSecondary,
+  },
+
+  chartCard: {
+    margin: 12,
+    backgroundColor: colors.card,
+    borderRadius: 18,
+  },
+
+  bottomBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 12,
+    paddingBottom: 25,
+    backgroundColor: colors.card,
+  },
+
+  tabItem: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

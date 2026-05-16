@@ -1,18 +1,19 @@
-import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  Dimensions,
-  Animated,
-} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import {
+  Animated,
+  Dimensions,
+  Modal,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { LineChart } from "react-native-gifted-charts";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const screenWidth = Dimensions.get("window").width;
-const screenHeight = Dimensions.get("window").height;
 
 const colors = {
   primary: "#0B1220",
@@ -22,21 +23,57 @@ const colors = {
   cardBg: "#111827",
 };
 
-const sensors = [
-  { key: "light", name: "Light", icon: "sunny-outline", color: "#F59E0B", current: [5, 8, 10, 12, 11], previous: [4, 6, 9, 10, 10] },
-  { key: "temp", name: "Temp", icon: "thermometer-outline", color: "#FF6384", current: [15, 16, 17, 18, 19], previous: [14, 15, 16, 17, 18] },
-  { key: "curr", name: "Curr", icon: "battery-charging-outline", color: "#4BC0C0", current: [1, 1.5, 2, 2.2, 2], previous: [1, 1, 1.5, 2, 1.8] },
-  { key: "angle", name: "Sun Angle", icon: "sunny-outline", color: "#FFCE56", current: [30, 32, 35, 38, 40], previous: [28, 30, 32, 36, 38] },
-];
-
 export default function Sensors() {
+  const { t } = useTranslation();
   const [selectedSensor, setSelectedSensor] = useState(null);
   const [hoverAnim] = useState(new Animated.Value(1));
+  const [storageData, setStorageData] = useState([]);
 
-  const onPressIn = () =>
-    Animated.spring(hoverAnim, { toValue: 0.97, useNativeDriver: true }).start();
-  const onPressOut = () =>
-    Animated.spring(hoverAnim, { toValue: 1, friction: 3, useNativeDriver: true }).start();
+  // =========================
+  // LOAD STORAGE LIVE
+  // =========================
+  const loadStorage = async () => {
+    try {
+      const old = await AsyncStorage.getItem("sensor_stream");
+      const arr = old ? JSON.parse(old) : [];
+      setStorageData(arr);
+    } catch (e) {
+      console.log("Load error:", e);
+    }
+  };
+
+  useEffect(() => {
+    loadStorage();
+    const interval = setInterval(loadStorage, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // =========================
+  // SENSOR LIST (DYNAMIC)
+  // =========================
+  const sensors = [
+    { key: "light", name: t("sensors.light"), icon: "sunny-outline", color: "#F59E0B" },
+    { key: "temp", name: t("sensors.temp"), icon: "thermometer-outline", color: "#FF6384" },
+    { key: "curr", name: t("sensors.curr"), icon: "battery-charging-outline", color: "#4BC0C0" },
+    { key: "angle", name: t("sensors.angle"), icon: "sunny-outline", color: "#FFCE56" },
+  ];
+
+  // =========================
+  // SPLIT CURRENT / PREVIOUS
+  // =========================
+  const getSensorData = (key) => {
+    if (!storageData || storageData.length === 0) {
+      return { current: [0], previous: [0] };
+    }
+
+    const values = storageData.map((d) => d?.[key] ?? 0);
+    const mid = Math.floor(values.length / 2);
+
+    return {
+      current: values.slice(mid),
+      previous: values.slice(0, mid),
+    };
+  };
 
   const toLineData = (arr) =>
     arr.map((val, index) => ({
@@ -44,44 +81,83 @@ export default function Sensors() {
       label: `${index + 1}`,
     }));
 
-  
-  const cardHeight = (screenHeight - 190) / sensors.length;
+  const onPressIn = () =>
+    Animated.spring(hoverAnim, {
+      toValue: 0.97,
+      useNativeDriver: true,
+    }).start();
+
+  const onPressOut = () =>
+    Animated.spring(hoverAnim, {
+      toValue: 1,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
 
   return (
     <View style={styles.container}>
-      {sensors.map((s) => (
-        <Animated.View
-          key={s.key}
-          style={[
-            styles.sensorCard,
-            {
-              height: cardHeight,
-              transform: [{ scale: hoverAnim }],
-              shadowColor: s.color,
-            },
-          ]}
-        >
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPressIn={onPressIn}
-            onPressOut={onPressOut}
-            onPress={() => setSelectedSensor(s)}
-            style={styles.sensorTouchable}
+      {/* =========================
+          CARDS
+      ========================= */}
+      {sensors.map((s) => {
+        const data = getSensorData(s.key);
+        const lastValue = data.current[data.current.length - 1] || 0;
+
+        return (
+          <Animated.View
+            key={s.key}
+            style={[
+              styles.sensorCard,
+              {
+                transform: [{ scale: hoverAnim }],
+                shadowColor: s.color,
+                borderLeftColor: s.color,
+              },
+            ]}
           >
-            <View style={[styles.iconCircle, { backgroundColor: s.color + "22" }]}>
-              <Ionicons name={s.icon} size={34} color={s.color} />
-            </View>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPressIn={onPressIn}
+              onPressOut={onPressOut}
+              onPress={() => setSelectedSensor({ ...s, ...data })}
+              style={styles.sensorTouchable}
+            >
+              <View style={styles.cardHeader}>
+                <View style={[styles.iconBlock, { borderColor: s.color + "33" }]}>
+                  <Ionicons name={s.icon} size={28} color={s.color} />
+                </View>
 
-            <View style={styles.textWrap}>
+                <View style={[styles.badge, { backgroundColor: s.color + "18" }]}>
+                  <Text style={[styles.badgeText, { color: s.color }]}>
+                    {t("sensors.live")}
+                  </Text>
+                </View>
+              </View>
+
               <Text style={styles.sensorLabel}>{s.name}</Text>
-              <Text style={[styles.sensorValue, { color: s.color }]}>
-                {s.current[s.current.length - 1]}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </Animated.View>
-      ))}
 
+              <Text style={[styles.sensorValue, { color: s.color }]}>
+                {lastValue}
+              </Text>
+
+              <View style={styles.cardFooter}>
+                <Text style={styles.sensorMeta}>{t("sensors.current")}</Text>
+
+                <View style={styles.statusRow}>
+                  <View style={styles.statusDot} />
+                  <Text style={styles.statusText}>
+                    {t("sensors.operational")}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
+        );
+      })}
+
+      {/* =========================
+          MODAL
+      ========================= */}
       <Modal
         visible={!!selectedSensor}
         transparent
@@ -113,7 +189,7 @@ export default function Sensors() {
                   <LineChart
                     data={toLineData(selectedSensor.current)}
                     data2={toLineData(selectedSensor.previous)}
-                    width={screenWidth * 0.60}
+                    width={screenWidth * 0.6}
                     height={200}
                     curved
                     color="#FACC15"
@@ -121,23 +197,21 @@ export default function Sensors() {
                     hideDataPoints
                     thickness={3}
                     thickness2={3}
-                    yAxisTextStyle={{ color: colors.textSecondary }}
-                    xAxisLabelTextStyle={{ color: colors.textSecondary }}
-                    rulesColor="#1F2937"
-                    noOfSections={5}
-                    initialSpacing={10}
-                    spacing={40}
                   />
 
                   <View style={styles.legend}>
                     <View style={styles.legendItem}>
-                      <View style={[styles.dot, { backgroundColor: "#FACC15" }]} />
-                      <Text style={styles.legendText}>Current</Text>
+                      <View style={[styles.legendDot, { backgroundColor: "#FACC15" }]} />
+                      <Text style={styles.legendText}>
+                        {t("sensors.current")}
+                      </Text>
                     </View>
 
                     <View style={styles.legendItem}>
-                      <View style={[styles.dot, { backgroundColor: "#3B82F6" }]} />
-                      <Text style={styles.legendText}>Previous</Text>
+                      <View style={[styles.legendDot, { backgroundColor: "#3B82F6" }]} />
+                      <Text style={styles.legendText}>
+                        {t("sensors.previous")}
+                      </Text>
                     </View>
                   </View>
                 </View>
@@ -153,93 +227,124 @@ export default function Sensors() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    padding: 16,
     backgroundColor: colors.primary,
-    padding: 12,
   },
   sensorCard: {
     backgroundColor: colors.cardBg,
-    borderRadius: 20,
-    justifyContent: "center",
-    elevation: 6,
-    marginVertical: 6,
+    borderRadius: 12,
+    padding: 5,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   sensorTouchable: {
-    alignItems: "center",
-    paddingVertical: 10,
+    flex: 1,
   },
-  iconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 6,
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  textWrap: {
-    alignItems: "center",
+  iconBlock: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   sensorLabel: {
-    fontSize: 16,
-    color: colors.textSecondary,
+    fontSize: 18,
+    color: colors.textPrimary,
+    marginBottom: 8,
   },
   sensorValue: {
     fontSize: 24,
-    fontWeight: "700",
+    fontWeight: 'bold',
+    marginBottom: 12,
   },
-
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sensorMeta: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalContent: {
-    width: "92%",
     backgroundColor: colors.cardBg,
-    borderRadius: 20,
-    paddingVertical: 18,
-    alignItems: "center",
+    borderRadius: 16,
+    padding: 20,
+    width: '90%',
+    alignItems: 'center',
   },
   topRightClose: {
-    position: "absolute",
+    position: 'absolute',
     top: 10,
     right: 10,
-    backgroundColor: "#1F2937",
-    borderRadius: 20,
-    padding: 4,
   },
   modalSensorName: {
     fontSize: 22,
-    fontWeight: "700",
     color: colors.textPrimary,
-    marginBottom: 12,
+    marginVertical: 16,
   },
-
   chartCard: {
-    width: "90%",
-    backgroundColor: "#0F172A",
-    borderRadius: 16,
-    padding: 10,
-    alignItems: "center",
+    width: '100%',
+    alignItems: 'center',
   },
-
   legend: {
-    flexDirection: "row",
-    marginTop: 10,
-    gap: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 16,
   },
   legendItem: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 12,
   },
-  dot: {
+  legendDot: {
     width: 10,
     height: 10,
     borderRadius: 5,
     marginRight: 6,
   },
   legendText: {
+    fontSize: 14,
     color: colors.textSecondary,
-    fontSize: 12,
   },
 });
